@@ -47,7 +47,7 @@ impl Recorder {
         let stream = device.build_input_stream(
             &config,
             move |data: &[f32], _| {
-                let mut guard = writer_clone.lock().unwrap();
+                let mut guard = writer_clone.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(w) = guard.as_mut() {
                     for &s in data {
                         let clamped = s.clamp(-1.0, 1.0);

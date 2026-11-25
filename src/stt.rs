@@ -69,7 +69,9 @@ pub async fn transcribe(
         api_key
     );
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build().map_err(|e| e.to_string())?;
     let resp = client
         .post(&url)
         .json(&body)

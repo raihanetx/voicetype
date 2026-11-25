@@ -94,6 +94,8 @@ async fn main() {
     loop {
         tokio::select! {
             Some(()) = auto_rx.recv() => {
+                // Drain queued auto-triggers to avoid spam recordings
+                while auto_rx.try_recv().is_ok() {}
                 if is_recording.load(Ordering::Relaxed) { /* ignore while recording */ } else {
                     is_recording.store(true, Ordering::Relaxed);
                     overlay.set_recording(true);
@@ -117,8 +119,9 @@ async fn main() {
                                         let target = focused2.lock().unwrap().clone();
                                         if let Some(t) = target {
                                             let wid = window_id2.lock().unwrap().clone();
-                                            if let Ok(conn) = AccessibilityConnection::new().await {
-                                                let _ = inject::inject_text(conn.connection(), &t, &text, wid.as_deref()).await;
+                                            match AccessibilityConnection::new().await {
+                                                Ok(conn) => { let _ = inject::inject_text(conn.connection(), &t, &text, wid.as_deref()).await; }
+                                                Err(e) => tracing::error!("atspi reconnect failed: {e}"),
                                             }
                                         }
                                     }
@@ -159,8 +162,9 @@ async fn main() {
                                         let target = focused2.lock().unwrap().clone();
                                         if let Some(t) = target {
                                             let wid = window_id2.lock().unwrap().clone();
-                                            if let Ok(conn) = AccessibilityConnection::new().await {
-                                                let _ = inject::inject_text(conn.connection(), &t, &text, wid.as_deref()).await;
+                                            match AccessibilityConnection::new().await {
+                                                Ok(conn) => { let _ = inject::inject_text(conn.connection(), &t, &text, wid.as_deref()).await; }
+                                                Err(e) => tracing::error!("atspi reconnect failed: {e}"),
                                             }
                                         }
                                     }
