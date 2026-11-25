@@ -41,9 +41,19 @@ jobs:
 
       - name: Build .deb package
         run: |
-          mkdir -p deb/DEBIAN deb/usr/bin
+          mkdir -p deb/DEBIAN deb/usr/bin deb/usr/share/applications
           cp target/release/voicetype deb/usr/bin/voicetype
           chmod 755 deb/usr/bin/voicetype
+          cat > deb/usr/share/applications/voicetype.desktop <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=VoiceType
+          Comment=Voice dictation for Linux Mint
+          Exec=/usr/bin/voicetype
+          Icon=audio-input-microphone
+          Terminal=false
+          Categories=Utility;Accessibility;
+          DESKTOP
           cat > deb/DEBIAN/control <<'EOF'
           Package: voicetype
           Version: 0.1.0
