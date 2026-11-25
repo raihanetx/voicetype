@@ -40,6 +40,8 @@ impl Recorder {
         let writer_clone = writer.clone();
         let last_sound = Arc::new(Mutex::new(Instant::now()));
         let last_sound_cb = last_sound.clone();
+        let had_speech_flag = Arc::new(AtomicBool::new(false));
+        let had_speech_cb = had_speech_flag.clone();
         let threshold = silence_threshold;
 
         let stream = device.build_input_stream(
@@ -48,7 +50,8 @@ impl Recorder {
                 let mut guard = writer_clone.lock().unwrap();
                 if let Some(w) = guard.as_mut() {
                     for &s in data {
-                        let _ = w.write_sample((s * i16::MAX as f32) as i16);
+                        let clamped = s.clamp(-1.0, 1.0);
+                        let _ = w.write_sample((clamped * i16::MAX as f32) as i16);
                     }
                 }
                 // RMS of chunk
@@ -57,6 +60,7 @@ impl Recorder {
                 let rms = if data.is_empty() { 0.0 } else { (sum / data.len() as f32).sqrt() };
                 if rms >= threshold {
                     *last_sound_cb.lock().unwrap() = Instant::now();
+                    had_speech_cb.store(true, Ordering::Relaxed);
                 }
             },
             |e| tracing::error!("stream err: {e}"),
@@ -67,16 +71,12 @@ impl Recorder {
 
         let start = Instant::now();
         let max = Duration::from_secs(max_seconds as u64);
-        let mut had_speech = false;
         loop {
             std::thread::sleep(Duration::from_millis(200));
             if stop.load(Ordering::Relaxed) { break; }
             if start.elapsed() >= max { break; }
+            let had_speech = had_speech_flag.load(Ordering::Relaxed);
             let silence_for = last_sound.lock().unwrap().elapsed();
-            // only auto-stop after we've heard speech, then 2s silence
-            if silence_for < Duration::from_millis(50) {
-                had_speech = true;
-            }
             if had_speech && silence_for >= Duration::from_secs(2) {
                 break;
             }

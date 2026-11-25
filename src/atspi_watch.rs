@@ -20,7 +20,9 @@ pub async fn run_watcher(
     auto_record: bool,
     auto_tx: mpsc::Sender<()>,
 ) {
-    let _ = conn.register_event::<StateChangedEvent>().await;
+    if let Err(e) = conn.register_event::<StateChangedEvent>().await {
+        tracing::error!("failed to register AT-SPI events: {e}");
+    }
     let mut stream = conn.event_stream();
     std::pin::pin!(&mut stream);
 

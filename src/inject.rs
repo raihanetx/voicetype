@@ -28,20 +28,20 @@ pub async fn inject_text(conn: &Connection, target: &ObjectRef, text: &str, wind
     }
 
     // Fallback: xdotool typing (X11). --delay avoids dropped chars in terminals.
-    let mut cmd = std::process::Command::new("xdotool");
+    // Try with --window first (targeted), fall back to plain type
+    let mut ok = false;
     if let Some(wid) = window_id {
-        cmd.arg("type").arg("--window").arg(wid);
-    } else {
-        cmd.arg("type");
+        let st = std::process::Command::new("xdotool")
+            .arg("type").arg("--window").arg(wid)
+            .arg("--delay").arg("12").arg("--clearmodifiers")
+            .arg("--").arg(text).status();
+        if let Ok(s) = st { if s.success() { ok = true; } }
     }
-    let status = cmd
-        .arg("--delay").arg("12")
-        .arg("--clearmodifiers")
-        .arg("--")
-        .arg(text)
-        .status();
-    match status {
-        Ok(s) if s.success() => Ok(()),
-        _ => Err("injection failed (atspi + xdotool)".into()),
+    if !ok {
+        let st = std::process::Command::new("xdotool")
+            .arg("type").arg("--delay").arg("12").arg("--clearmodifiers")
+            .arg("--").arg(text).status();
+        if let Ok(s) = st { if s.success() { ok = true; } }
     }
+    if ok { Ok(()) } else { Err("injection failed (atspi + xdotool)".into()) }
 }

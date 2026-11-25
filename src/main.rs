@@ -43,12 +43,18 @@ async fn main() {
                    "--text=Paste your Google Cloud Speech-to-Text API key:",
                    "--width=400"])
             .output();
-        if let Ok(o) = out {
-            let key = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if !key.is_empty() {
-                cfg.google_api_key = key;
-                let _ = config::save(&cfg);
+        match out {
+            Ok(o) if o.status.success() => {
+                let key = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !key.is_empty() {
+                    cfg.google_api_key = key;
+                    let _ = config::save(&cfg);
+                } else {
+                    tracing::warn!("No API key entered; transcription will fail");
+                }
             }
+            Ok(_) => { tracing::warn!("Setup cancelled; transcription will fail"); }
+            Err(e) => { tracing::error!("zenity not found ({e}); install zenity or edit config manually"); }
         }
     }
 
@@ -82,14 +88,14 @@ async fn main() {
         }
     });
 
-    let mut recording = false;
+    let is_recording = Arc::new(AtomicBool::new(false));
     let mut current_stop: Option<Arc<AtomicBool>> = None;
 
     loop {
         tokio::select! {
             Some(()) = auto_rx.recv() => {
-                if recording { /* ignore while recording */ } else {
-                    recording = true;
+                if is_recording.load(Ordering::Relaxed) { /* ignore while recording */ } else {
+                    is_recording.store(true, Ordering::Relaxed);
                     overlay.set_recording(true);
                     let stop = Arc::new(AtomicBool::new(false));
                     current_stop = Some(stop.clone());
@@ -98,6 +104,7 @@ async fn main() {
                     let focused2 = focused.clone();
                     let window_id2 = window_id.clone();
                     let stop2 = stop.clone();
+                    let is_rec2 = is_recording.clone();
                     tokio::spawn(async move {
                         let rec = audio::Recorder { stop: stop2.clone() };
                         let path = tokio::task::spawn_blocking(move || {
@@ -120,16 +127,17 @@ async fn main() {
                             }
                             let _ = std::fs::remove_file(p);
                         }
+                        is_rec2.store(false, Ordering::Relaxed);
                         overlay2.set_recording(false);
                     });
                 }
             }
             Some(()) = click_rx.recv() => {
-                if recording {
+                if is_recording.load(Ordering::Relaxed) {
                     if let Some(s) = &current_stop { s.store(true, Ordering::Relaxed); }
-                    recording = false;
+                    is_recording.store(false, Ordering::Relaxed);
                 } else {
-                    recording = true;
+                    is_recording.store(true, Ordering::Relaxed);
                     overlay.set_recording(true);
                     let stop = Arc::new(AtomicBool::new(false));
                     current_stop = Some(stop.clone());
@@ -138,6 +146,7 @@ async fn main() {
                     let focused2 = focused.clone();
                     let window_id2 = window_id.clone();
                     let stop2 = stop.clone();
+                    let is_rec2 = is_recording.clone();
                     tokio::spawn(async move {
                         let rec = audio::Recorder { stop: stop2.clone() };
                         let path = tokio::task::spawn_blocking(move || {
@@ -160,6 +169,7 @@ async fn main() {
                             }
                             let _ = std::fs::remove_file(p);
                         }
+                        is_rec2.store(false, Ordering::Relaxed);
                         overlay2.set_recording(false);
                     });
                 }
