@@ -5,7 +5,7 @@ set -euo pipefail
 echo "==> Installing system dependencies"
 sudo apt update
 sudo apt install -y build-essential pkg-config libgtk-3-dev \
-  libatspi2.0-dev libasound2-dev libx11-dev curl xdotool notify-osd
+  libatspi2.0-dev libasound2-dev libx11-dev curl xdotool notify-osd zenity
 
 echo "==> Installing Rust toolchain (if missing)"
 if ! command -v cargo >/dev/null 2>&1; then

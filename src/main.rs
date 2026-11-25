@@ -34,7 +34,23 @@ async fn main() {
         return;
     }
 
-    let cfg = config::load();
+    let mut cfg = config::load();
+
+    // First-run setup wizard via zenity (no heavy GUI dependency)
+    if cfg.google_api_key.is_empty() {
+        let out = std::process::Command::new("zenity")
+            .args(["--entry", "--title=VoiceType Setup",
+                   "--text=Paste your Google Cloud Speech-to-Text API key:",
+                   "--width=400"])
+            .output();
+        if let Ok(o) = out {
+            let key = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if !key.is_empty() {
+                cfg.google_api_key = key;
+                let _ = config::save(&cfg);
+            }
+        }
+    }
 
     let overlay = overlay::Overlay::new();
     let focused: Arc<Mutex<Option<ObjectRef>>> = Arc::new(Mutex::new(None));
