@@ -1,0 +1,36 @@
+[package]
+name = "voicetype"
+version = "0.1.0"
+edition = "2021"
+authors = ["VoiceType"]
+description = "Voice dictation for Linux Mint: click any input field, speak, get text."
+license = "MIT"
+
+[dependencies]
+atspi = { version = "0.22", features = ["tokio", "proxies", "connection", "zbus"] }
+cpal = "0.15"
+hound = "3.5"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1.0"
+dirs = "5"
+tracing = "0.1"
+futures-lite = "2"
+zbus = "4"
+tracing-subscriber = "0.3"
+thiserror = "2"
+base64 = "0.22"
+x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
+
+[[bin]]
+name = "voicetype"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
