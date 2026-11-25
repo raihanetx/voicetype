@@ -39,8 +39,32 @@ jobs:
       - name: Build (release)
         run: cargo build --release --verbose
 
+      - name: Build .deb package
+        run: |
+          mkdir -p deb/DEBIAN deb/usr/bin
+          cp target/release/voicetype deb/usr/bin/voicetype
+          chmod 755 deb/usr/bin/voicetype
+          cat > deb/DEBIAN/control <<'EOF'
+          Package: voicetype
+          Version: 0.1.0
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Depends: libatspi2.0-0, libasound2, libx11-6, xdotool
+          Maintainer: raihanetx
+          Description: Voice dictation for Linux Mint (Cinnamon)
+           Speak instead of type.
+          EOF
+          dpkg-deb --build deb voicetype_0.1.0_amd64.deb
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
           name: voicetype-linux
           path: target/release/voicetype
+
+      - name: Upload .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: voicetype-deb
+          path: voicetype_0.1.0_amd64.deb
