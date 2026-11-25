@@ -60,7 +60,7 @@ jobs:
           Section: utils
           Priority: optional
           Architecture: amd64
-          Depends: libatspi2.0-0, libasound2, libx11-6, xdotool
+          Depends: libatspi2.0-0, libasound2, libx11-6, xdotool, zenity
           Maintainer: raihanetx
           Description: Voice dictation for Linux Mint (Cinnamon)
            Speak instead of type.
