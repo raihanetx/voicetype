@@ -59,7 +59,7 @@ impl Recorder {
                 for &s in data { sum += s * s; }
                 let rms = if data.is_empty() { 0.0 } else { (sum / data.len() as f32).sqrt() };
                 if rms >= threshold {
-                    *last_sound_cb.lock().unwrap() = Instant::now();
+                    *last_sound_cb.lock().unwrap_or_else(|e| e.into_inner()) = Instant::now();
                     had_speech_cb.store(true, Ordering::Relaxed);
                 }
             },
@@ -76,14 +76,14 @@ impl Recorder {
             if stop.load(Ordering::Relaxed) { break; }
             if start.elapsed() >= max { break; }
             let had_speech = had_speech_flag.load(Ordering::Relaxed);
-            let silence_for = last_sound.lock().unwrap().elapsed();
+            let silence_for = last_sound.lock().unwrap_or_else(|e| e.into_inner()).elapsed();
             if had_speech && silence_for >= Duration::from_secs(2) {
                 break;
             }
         }
 
         drop(stream);
-        let mut guard = writer.lock().unwrap();
+        let mut guard = writer.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(w) = guard.take() {
             w.finalize().map_err(|e| e.to_string())?;
         }

@@ -21,8 +21,11 @@ async fn main() {
         .open(log_dir.join("voicetype.log"))
         .ok();
     if let Some(f) = log_file {
+        let f = std::sync::Arc::new(std::sync::Mutex::new(f));
         tracing_subscriber::fmt()
-            .with_writer(move || f.try_clone().unwrap())
+            .with_writer(move || {
+                f.lock().unwrap_or_else(|e| e.into_inner()).try_clone().unwrap()
+            })
             .init();
     } else {
         tracing_subscriber::fmt::init();
@@ -80,7 +83,7 @@ async fn main() {
 
     let overlay_click = overlay.clone();
     std::thread::spawn(move || loop {
-        let rx = overlay_click.click_rx.lock().unwrap();
+        let rx = overlay_click.click_rx.lock().unwrap_or_else(|e| e.into_inner());
         if rx.recv().is_ok() {
             let _ = click_tx.blocking_send(());
         } else {
@@ -116,9 +119,9 @@ async fn main() {
                             match stt::transcribe(&cfg2.google_api_key, &p, &cfg2.language, &cfg2.alt_languages, &cfg2.model, cfg2.sample_rate).await {
                                 Ok(text) => {
                                     if !text.is_empty() {
-                                        let target = focused2.lock().unwrap().clone();
+                                        let target = focused2.lock().unwrap_or_else(|e| e.into_inner()).clone();
                                         if let Some(t) = target {
-                                            let wid = window_id2.lock().unwrap().clone();
+                                            let wid = window_id2.lock().unwrap_or_else(|e| e.into_inner()).clone();
                                             match AccessibilityConnection::new().await {
                                                 Ok(conn) => { let _ = inject::inject_text(conn.connection(), &t, &text, wid.as_deref()).await; }
                                                 Err(e) => tracing::error!("atspi reconnect failed: {e}"),
@@ -159,9 +162,9 @@ async fn main() {
                             match stt::transcribe(&cfg2.google_api_key, &p, &cfg2.language, &cfg2.alt_languages, &cfg2.model, cfg2.sample_rate).await {
                                 Ok(text) => {
                                     if !text.is_empty() {
-                                        let target = focused2.lock().unwrap().clone();
+                                        let target = focused2.lock().unwrap_or_else(|e| e.into_inner()).clone();
                                         if let Some(t) = target {
-                                            let wid = window_id2.lock().unwrap().clone();
+                                            let wid = window_id2.lock().unwrap_or_else(|e| e.into_inner()).clone();
                                             match AccessibilityConnection::new().await {
                                                 Ok(conn) => { let _ = inject::inject_text(conn.connection(), &t, &text, wid.as_deref()).await; }
                                                 Err(e) => tracing::error!("atspi reconnect failed: {e}"),

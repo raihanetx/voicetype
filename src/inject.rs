@@ -21,7 +21,8 @@ pub async fn inject_text(conn: &Connection, target: &ObjectRef, text: &str, wind
     let tp = t_builder.cache_properties(atspi::zbus::proxy::CacheProperties::No).build().await.map_err(|e| e.to_string())?;
 
     let offset = tp.caret_offset().await.unwrap_or(0);
-    if et.insert_text(offset, text, text.len() as i32).await.is_ok() {
+    let char_count = text.chars().count() as i32;
+    if et.insert_text(offset, text, char_count).await.is_ok() {
         // move caret
         let _ = tp.set_caret_offset(offset + text.chars().count() as i32).await;
         return Ok(());

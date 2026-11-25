@@ -30,30 +30,30 @@ impl Overlay {
     }
 
     pub fn show(&self, x: i32, y: i32) {
-        let _ = self.cmd_tx.lock().unwrap().send(OverlayCmd::Show(x, y));
+        let _ = self.cmd_tx.lock().unwrap_or_else(|e| e.into_inner()).send(OverlayCmd::Show(x, y));
     }
     pub fn hide(&self) {
-        let _ = self.cmd_tx.lock().unwrap().send(OverlayCmd::Hide);
+        let _ = self.cmd_tx.lock().unwrap_or_else(|e| e.into_inner()).send(OverlayCmd::Hide);
     }
     pub fn set_recording(&self, rec: bool) {
-        let _ = self.cmd_tx.lock().unwrap().send(OverlayCmd::SetColor(rec));
+        let _ = self.cmd_tx.lock().unwrap_or_else(|e| e.into_inner()).send(OverlayCmd::SetColor(rec));
     }
 }
 
 fn run_x11(click_tx: Sender<()>, cmd_rx: Receiver<OverlayCmd>) {
     let (conn, screen_num) = match x11rb::connect(None) {
         Ok(v) => v,
-        Err(_) => return,
+        Err(e) => { tracing::error!("X11 connect failed: {e}"); return; }
     };
     let screen = &conn.setup().roots[screen_num];
     let root = screen.root;
     let depth = screen.root_depth;
     let visual = screen.root_visual;
 
-    let win = conn.generate_id().unwrap();
+    let win = match conn.generate_id() { Ok(id) => id, Err(e) => { tracing::error!("generate_id: {e}"); return; } };
     let width = 36u16;
     let height = 36u16;
-    conn.create_window(
+    if let Err(e) = conn.create_window(
         depth,
         win,
         root,
@@ -63,10 +63,14 @@ fn run_x11(click_tx: Sender<()>, cmd_rx: Receiver<OverlayCmd>) {
         &CreateWindowAux::new()
             .override_redirect(1)
             .event_mask(EventMask::EXPOSURE | EventMask::BUTTON_PRESS),
-    ).unwrap();
+    ) {
+        tracing::error!("create_window: {e}"); return;
+    }
 
-    let gc = conn.generate_id().unwrap();
-    conn.create_gc(gc, win, &CreateGCAux::new()).unwrap();
+    let gc = match conn.generate_id() { Ok(id) => id, Err(e) => { tracing::error!("generate_id gc: {e}"); return; } };
+    if let Err(e) = conn.create_gc(gc, win, &CreateGCAux::new()) {
+        tracing::error!("create_gc: {e}"); return;
+    }
 
     let mut visible = false;
     let mut recording = false;
