@@ -14,11 +14,11 @@ use tokio::sync::mpsc;
 #[tokio::main]
 async fn main() {
     // File + console logging for easy debugging by non-technical users.
-    let log_dir = dirs::data_local_dir().unwrap_or_default().join("voicetype");
-    let _ = std::fs::create_dir_all(&log_dir);
+    let log_file_path = log_path();
+    let _ = std::fs::create_dir_all(log_file_path.parent().unwrap_or(&log_file_path));
     let log_file = std::fs::OpenOptions::new()
         .create(true).append(true)
-        .open(log_dir.join("voicetype.log"))
+        .open(&log_file_path)
         .ok();
     if let Some(f) = log_file {
         let f = std::sync::Arc::new(std::sync::Mutex::new(f));
@@ -39,25 +39,36 @@ async fn main() {
 
     let mut cfg = config::load();
 
-    // First-run setup wizard via zenity (no heavy GUI dependency)
-    if cfg.google_api_key.is_empty() {
-        let out = std::process::Command::new("zenity")
+    // First-run setup wizard. Prefer zenity; fall back to reading from the
+    // terminal so a missing zenity doesn't silently leave us with no key.
+    if cfg.google_api_key.is_empty() || cfg.google_api_key == "PASTE_YOUR_GOOGLE_CLOUD_API_KEY_HERE" {
+        let mut key = String::new();
+        match std::process::Command::new("zenity")
             .args(["--entry", "--title=VoiceType Setup",
                    "--text=Paste your Google Cloud Speech-to-Text API key:",
                    "--width=400"])
-            .output();
-        match out {
+            .output()
+        {
             Ok(o) if o.status.success() => {
-                let key = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                if !key.is_empty() {
-                    cfg.google_api_key = key;
-                    let _ = config::save(&cfg);
-                } else {
-                    tracing::warn!("No API key entered; transcription will fail");
+                key = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            }
+            Ok(_) => tracing::warn!("Setup dialog cancelled"),
+            Err(e) => {
+                // zenity not installed: ask on the terminal instead of dying silently.
+                tracing::warn!("zenity not available ({e}); falling back to terminal prompt");
+                use std::io::Write;
+                print!("Paste your Google Cloud Speech-to-Text API key: ");
+                let _ = std::io::stdout().flush();
+                if std::io::stdin().read_line(&mut key).is_ok() {
+                    key = key.trim().to_string();
                 }
             }
-            Ok(_) => { tracing::warn!("Setup cancelled; transcription will fail"); }
-            Err(e) => { tracing::error!("zenity not found ({e}); install zenity or edit config manually"); }
+        }
+        if !key.is_empty() {
+            cfg.google_api_key = key;
+            let _ = config::save(&cfg);
+        } else {
+            tracing::warn!("No API key entered; transcription will fail");
         }
     }
 
@@ -70,7 +81,18 @@ async fn main() {
 
     let watcher_conn = match AccessibilityConnection::new().await {
         Ok(c) => c,
-        Err(e) => { eprintln!("atspi connection failed: {e}"); return; }
+        Err(e) => {
+            let msg = format!(
+                "Could not connect to the accessibility bus.\n\n{e}\n\n\
+                 Make sure accessibility is enabled (System Settings → Accessibility) \
+                 and that `dbus-send --session --dest=org.a11y.Bus \
+                 /org/a11y/bus org.a11y.Bus.GetAddress` works.\n\n\
+                 Log: {}", log_path().display()
+            );
+            tracing::error!("atspi connection failed: {e}");
+            notify_error(&msg);
+            std::process::exit(1);
+        }
     };
     let overlay_w = overlay.clone();
     let focused_w = focused.clone();
@@ -209,5 +231,28 @@ async fn run_checks() {
         Ok(_) => println!("AT-SPI: OK"),
         Err(e) => println!("AT-SPI: FAILED ({e})"),
     }
-    println!("\nLog file: {}", dirs::data_local_dir().unwrap_or_default().join("voicetype/voicetype.log").display());
+    println!("\nLog file: {}", log_path().display());
+}
+
+/// Path to the log file, shared by logging setup and the error dialog.
+fn log_path() -> std::path::PathBuf {
+    dirs::data_local_dir().unwrap_or_default().join("voicetype").join("voicetype.log")
+}
+
+/// Best-effort user-visible error: system notification if available, else
+/// stderr. A `Terminal=false` launcher hides stderr, so the notification is
+/// what lets a non-technical user see *why* startup failed.
+pub fn notify_error(msg: &str) {
+    eprintln!("{msg}");
+    let notified = std::process::Command::new("notify-send")
+        .args(["--urgency=critical", "--app-name=VoiceType", "VoiceType failed to start", msg])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !notified {
+        // Last resort: try zenity's error dialog.
+        let _ = std::process::Command::new("zenity")
+            .args(["--error", "--title=VoiceType failed to start", &format!("--text={msg}")])
+            .status();
+    }
 }

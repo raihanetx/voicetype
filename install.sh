@@ -5,7 +5,7 @@ set -euo pipefail
 echo "==> Installing system dependencies"
 sudo apt update
 sudo apt install -y build-essential pkg-config libgtk-3-dev \
-  libatspi2.0-dev libasound2-dev libx11-dev curl xdotool notify-osd zenity
+  libatspi2.0-dev libasound2-dev libx11-dev curl xdotool notify-osd zenity libnotify-bin
 
 echo "==> Installing Rust toolchain (if missing)"
 if ! command -v cargo >/dev/null 2>&1; then
@@ -35,6 +35,13 @@ TOML
   echo "!! Created $CFG_DIR/config.toml — edit it and paste your Google API key."
 fi
 
+echo "==> Creating launcher wrapper"
+cat > "$DATA_DIR/voicetype-launch.sh" <<EOF2
+#!/bin/sh
+exec "$BIN" > "$DATA_DIR/launch.log" 2>&1
+EOF2
+chmod +x "$DATA_DIR/voicetype-launch.sh"
+
 echo "==> Creating desktop entry + autostart"
 mkdir -p "$HOME/.local/share/applications" "$HOME/.config/autostart"
 cat > "$HOME/.local/share/applications/voicetype.desktop" <<DESKTOP
@@ -42,7 +49,7 @@ cat > "$HOME/.local/share/applications/voicetype.desktop" <<DESKTOP
 Type=Application
 Name=VoiceType
 Comment=Voice dictation for Linux Mint
-Exec=$BIN
+Exec=$DATA_DIR/voicetype-launch.sh
 Icon=audio-input-microphone
 Terminal=false
 Categories=Utility;Accessibility;
@@ -53,6 +60,8 @@ echo
 echo "==> Done."
 echo "1) Edit $CFG_DIR/config.toml and paste your Google Cloud API key."
 echo "2) Run: $BIN --check   (verifies microphone, AT-SPI, X11)"
-echo "3) Log out and back in (or run $BIN) to start VoiceType."
-echo "   If anything breaks, send me: $DATA_DIR/voicetype.log"
+echo "3) Start VoiceType from the menu or: $DATA_DIR/voicetype-launch.sh"
+echo "   If it still doesn't open, send me these two files:"
+echo "     $DATA_DIR/voicetype.log"
+echo "     $DATA_DIR/launch.log"
 " path="/home/user/playground-4/voicetype/install.sh

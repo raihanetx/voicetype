@@ -43,7 +43,11 @@ impl Overlay {
 fn run_x11(click_tx: Sender<()>, cmd_rx: Receiver<OverlayCmd>) {
     let (conn, screen_num) = match x11rb::connect(None) {
         Ok(v) => v,
-        Err(e) => { tracing::error!("X11 connect failed: {e}"); return; }
+        Err(e) => {
+            tracing::error!("X11 connect failed: {e}");
+            crate::notify_error(&format!("VoiceType could not connect to the display.\n\n{e}\n\nIs DISPLAY set (X11 session, not Wayland)?"));
+            return;
+        }
     };
     let screen = &conn.setup().roots[screen_num];
     let root = screen.root;
