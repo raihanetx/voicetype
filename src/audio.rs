@@ -10,6 +10,7 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self { stop: Arc::new(AtomicBool::new(false)) }
     }

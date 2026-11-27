@@ -3,10 +3,12 @@ mod audio;
 mod config;
 mod inject;
 mod overlay;
+mod session_log;
 mod stt;
 
 use atspi::connection::AccessibilityConnection;
 use atspi::ObjectRef;
+use session_log::SessionLog;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -38,10 +40,13 @@ async fn main() {
     }
 
     let mut cfg = config::load();
+    let log = SessionLog::new();
+    log.info(format!("VoiceType starting (model: {})", cfg.model));
 
     // First-run setup wizard. Prefer zenity; fall back to reading from the
     // terminal so a missing zenity doesn't silently leave us with no key.
     if cfg.google_api_key.is_empty() || cfg.google_api_key == "PASTE_YOUR_GOOGLE_CLOUD_API_KEY_HERE" {
+        log.info("no API key configured; launching setup");
         let mut key = String::new();
         match std::process::Command::new("zenity")
             .args(["--entry", "--title=VoiceType Setup",
@@ -52,10 +57,10 @@ async fn main() {
             Ok(o) if o.status.success() => {
                 key = String::from_utf8_lossy(&o.stdout).trim().to_string();
             }
-            Ok(_) => tracing::warn!("Setup dialog cancelled"),
+            Ok(_) => log.warn("setup dialog cancelled"),
             Err(e) => {
                 // zenity not installed: ask on the terminal instead of dying silently.
-                tracing::warn!("zenity not available ({e}); falling back to terminal prompt");
+                log.warn(format!("zenity not available ({e}); falling back to terminal prompt"));
                 use std::io::Write;
                 print!("Paste your Google Gemini API key: ");
                 let _ = std::io::stdout().flush();
@@ -68,7 +73,7 @@ async fn main() {
             cfg.google_api_key = key;
             let _ = config::save(&cfg);
         } else {
-            tracing::warn!("No API key entered; transcription will fail");
+            log.warn("no API key entered; transcription will fail");
         }
     }
 
@@ -76,9 +81,13 @@ async fn main() {
     // instead of failing silently on the first dictation.
     if !cfg.google_api_key.is_empty() {
         match stt::validate_key(&cfg.google_api_key).await {
-            Ok(()) => tracing::info!("Gemini API key validated"),
+            Ok(()) => {
+                log.info("Gemini API key validated");
+                notify_ok("VoiceType setup done",
+                    "Your Gemini key works. Click the mic next to any text field to dictate.");
+            }
             Err(e) => {
-                tracing::error!("API key validation failed: {e}");
+                log.error(format!("API key validation failed: {e}"));
                 notify_error(&format!(
                     "Your Gemini API key was rejected:\n\n{e}\n\nEdit {} and set a valid key.",
                     config::config_path().display()
@@ -88,10 +97,11 @@ async fn main() {
     }
 
     let overlay = overlay::Overlay::new();
+    overlay.show_debug();
     let focused: Arc<Mutex<Option<ObjectRef>>> = Arc::new(Mutex::new(None));
     let window_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
-    let (click_tx, mut click_rx) = mpsc::channel::<()>(16);
+    let (click_tx, mut click_rx) = mpsc::channel::<overlay::Btn>(16);
     let (auto_tx, mut auto_rx) = mpsc::channel::<()>(16);
 
     let watcher_conn = match AccessibilityConnection::new().await {
@@ -104,34 +114,37 @@ async fn main() {
                  /org/a11y/bus org.a11y.Bus.GetAddress` works.\n\n\
                  Log: {}", log_path().display()
             );
-            tracing::error!("atspi connection failed: {e}");
+            log.error(format!("atspi connection failed: {e}"));
             notify_error(&msg);
             std::process::exit(1);
         }
     };
+    log.info("connected to accessibility bus");
     let overlay_w = overlay.clone();
     let focused_w = focused.clone();
     let window_id_w = window_id.clone();
     let auto_record = cfg.auto_record_on_focus;
     let auto_tx_w = auto_tx.clone();
+    let log_w = log.clone();
     tokio::spawn(async move {
-        atspi_watch::run_watcher(watcher_conn, overlay_w, focused_w, window_id_w, auto_record, auto_tx_w).await;
+        atspi_watch::run_watcher(watcher_conn, overlay_w, focused_w, window_id_w, auto_record, auto_tx_w, log_w).await;
     });
 
     let overlay_click = overlay.clone();
     std::thread::spawn(move || loop {
-        let rx = overlay_click.click_rx.lock().unwrap_or_else(|e| e.into_inner());
-        if rx.recv().is_ok() {
-            let _ = click_tx.blocking_send(());
-        } else {
-            break;
+        let btn = {
+            let rx = overlay_click.click_rx.lock().unwrap_or_else(|e| e.into_inner());
+            rx.recv()
+        };
+        match btn {
+            Ok(b) => { if click_tx.blocking_send(b).is_err() { break; } }
+            Err(_) => break,
         }
     });
 
     let is_recording = Arc::new(AtomicBool::new(false));
     let mut current_stop: Option<Arc<AtomicBool>> = None;
 
-    // Shared pipeline types so both triggers (auto + click) use one code path.
     loop {
         tokio::select! {
             Some(()) = auto_rx.recv() => {
@@ -140,22 +153,32 @@ async fn main() {
                 if is_recording.load(Ordering::Relaxed) { /* ignore while recording */ } else {
                     start_pipeline(
                         &cfg, &overlay, &focused, &window_id, &is_recording,
-                        &mut current_stop,
+                        &mut current_stop, &log,
                     ).await;
                 }
             }
-            Some(()) = click_rx.recv() => {
-                if is_recording.load(Ordering::Relaxed) {
-                    if let Some(s) = &current_stop { s.store(true, Ordering::Relaxed); }
-                    is_recording.store(false, Ordering::Relaxed);
-                } else {
-                    start_pipeline(
-                        &cfg, &overlay, &focused, &window_id, &is_recording,
-                        &mut current_stop,
-                    ).await;
+            Some(btn) = click_rx.recv() => {
+                match btn {
+                    overlay::Btn::Debug => {
+                        show_report(&log);
+                    }
+                    overlay::Btn::Mic => {
+                        if is_recording.load(Ordering::Relaxed) {
+                            if let Some(s) = &current_stop { s.store(true, Ordering::Relaxed); }
+                            is_recording.store(false, Ordering::Relaxed);
+                            log.info("mic clicked: stop recording");
+                        } else {
+                            log.info("mic clicked: start recording");
+                            start_pipeline(
+                                &cfg, &overlay, &focused, &window_id, &is_recording,
+                                &mut current_stop, &log,
+                            ).await;
+                        }
+                    }
                 }
             }
             _ = tokio::signal::ctrl_c() => {
+                log.info("VoiceType stopping (ctrl-c)");
                 break;
             }
         }
@@ -163,7 +186,7 @@ async fn main() {
 }
 
 /// Begin a recording, then transcribe + inject in the background.
-/// Handles the overlay state machine: Recording -> Processing -> Idle/Error.
+/// Handles the mic button state machine: Recording -> Processing -> Idle/Error.
 async fn start_pipeline(
     cfg: &config::Config,
     overlay: &overlay::Overlay,
@@ -171,9 +194,10 @@ async fn start_pipeline(
     window_id: &Arc<Mutex<Option<String>>>,
     is_recording: &Arc<AtomicBool>,
     current_stop: &mut Option<Arc<AtomicBool>>,
+    log: &SessionLog,
 ) {
     is_recording.store(true, Ordering::Relaxed);
-    overlay.set_recording(true);
+    overlay.set_state(overlay::OverlayState::Recording);
 
     let stop = Arc::new(AtomicBool::new(false));
     *current_stop = Some(stop.clone());
@@ -184,8 +208,10 @@ async fn start_pipeline(
     let window_id2 = window_id.clone();
     let stop2 = stop.clone();
     let is_rec2 = is_recording.clone();
+    let log2 = log.clone();
 
     tokio::spawn(async move {
+        log2.info("recording started");
         let rec = audio::Recorder { stop: stop2.clone() };
         let path = tokio::task::spawn_blocking(move || {
             rec.record(cfg2.sample_rate, cfg2.silence_threshold, cfg2.max_record_seconds)
@@ -196,13 +222,15 @@ async fn start_pipeline(
 
         match path {
             Err(e) => {
-                tracing::error!("record: {e}");
+                log2.error(format!("recording failed: {e}"));
                 overlay2.set_state(overlay::OverlayState::Error);
                 notify_error(&format!("Recording failed: {e}"));
                 std::thread::sleep(std::time::Duration::from_secs(2));
                 overlay2.set_state(overlay::OverlayState::Idle);
             }
             Ok(p) => {
+                let secs = std::fs::metadata(&p).map(|m| m.len() / 32000).unwrap_or(0);
+                log2.info(format!("recording finished (~{secs}s); sending to Gemini ({})", cfg2.model));
                 overlay2.set_state(overlay::OverlayState::Processing);
                 let result = stt::transcribe(
                     &cfg2.google_api_key, &p, &cfg2.language,
@@ -212,31 +240,36 @@ async fn start_pipeline(
 
                 match result {
                     Ok(text) if !text.is_empty() => {
+                        log2.info(format!("transcript: \"{text}\""));
                         let target = focused2.lock().unwrap_or_else(|e| e.into_inner()).clone();
                         if let Some(t) = target {
                             let wid = window_id2.lock().unwrap_or_else(|e| e.into_inner()).clone();
                             match AccessibilityConnection::new().await {
                                 Ok(conn) => {
-                                    if let Err(e) = inject::inject_text(conn.connection(), &t, &text, wid.as_deref()).await {
-                                        tracing::error!("inject: {e}");
-                                        overlay2.set_state(overlay::OverlayState::Error);
-                                        notify_error(&format!("Could not insert text: {e}"));
-                                        std::thread::sleep(std::time::Duration::from_secs(2));
+                                    match inject::inject_text(conn.connection(), &t, &text, wid.as_deref()).await {
+                                        Ok(()) => log2.info("text injected into field"),
+                                        Err(e) => {
+                                            log2.error(format!("inject failed: {e}"));
+                                            overlay2.set_state(overlay::OverlayState::Error);
+                                            notify_error(&format!("Could not insert text: {e}"));
+                                            std::thread::sleep(std::time::Duration::from_secs(2));
+                                        }
                                     }
                                 }
                                 Err(e) => {
-                                    tracing::error!("atspi reconnect failed: {e}");
+                                    log2.error(format!("atspi reconnect failed: {e}"));
                                     overlay2.set_state(overlay::OverlayState::Error);
                                 }
                             }
+                        } else {
+                            log2.warn("no target field focused; transcript not inserted");
                         }
                     }
                     Ok(_) => {
-                        // No speech detected — not an error, just nothing to insert.
-                        tracing::info!("transcription was empty (no speech?)");
+                        log2.warn("transcription was empty (no speech?)");
                     }
                     Err(e) => {
-                        tracing::error!("stt: {e}");
+                        log2.error(format!("transcription failed: {e}"));
                         overlay2.set_state(overlay::OverlayState::Error);
                         notify_error(&format!("Transcription failed:\n\n{e}"));
                         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -246,6 +279,33 @@ async fn start_pipeline(
             }
         }
     });
+}
+
+/// Show the session report in a scrollable dialog (debug icon clicked).
+fn show_report(log: &SessionLog) {
+    let report = format!(
+        "VoiceType session report ({} events)\nLog file: {}\n{}\n{}",
+        log.len(),
+        log_path().display(),
+        "=".repeat(48),
+        log.report()
+    );
+    // Try zenity text-info (scrollable, copyable). If unavailable, notify.
+    use std::io::Write;
+    let child = std::process::Command::new("zenity")
+        .args(["--text-info", "--title=VoiceType debug report",
+               "--width=760", "--height=520", "--font=monospace"])
+        .stdin(std::process::Stdio::piped())
+        .spawn();
+    match child {
+        Ok(mut c) => {
+            if let Some(mut stdin) = c.stdin.take() {
+                let _ = stdin.write_all(report.as_bytes());
+            }
+            let _ = c.wait();
+        }
+        Err(_) => notify_ok("VoiceType debug report", &report),
+    }
 }
 async fn run_checks() {
     use std::process::Command;
@@ -303,4 +363,11 @@ pub fn notify_error(msg: &str) {
             .args(["--error", "--title=VoiceType failed to start", &format!("--text={msg}")])
             .status();
     }
+}
+
+/// Non-error confirmation notification (e.g. "setup done").
+pub fn notify_ok(title: &str, msg: &str) {
+    let _ = std::process::Command::new("notify-send")
+        .args(["--app-name=VoiceType", title, msg])
+        .status();
 }

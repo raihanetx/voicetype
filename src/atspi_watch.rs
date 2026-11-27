@@ -18,6 +18,7 @@ pub async fn run_watcher(
     window_id: Arc<Mutex<Option<String>>>,
     auto_record: bool,
     auto_tx: mpsc::Sender<()>,
+    log: crate::session_log::SessionLog,
 ) {
     if let Err(e) = conn.register_event::<StateChangedEvent>().await {
         tracing::error!("failed to register AT-SPI events: {e}");
@@ -36,7 +37,7 @@ pub async fn run_watcher(
                     continue;
                 }
                 if sc.enabled == 0 {
-                    overlay.hide();
+                    overlay.hide_mic();
                     *focused.lock().unwrap_or_else(|e| e.into_inner()) = None;
                     continue;
                 }
@@ -48,7 +49,7 @@ pub async fn run_watcher(
                 let role = acc.get_role().await.unwrap_or(atspi::Role::Unknown);
                 let is_text = matches!(role, Role::Entry | Role::PasswordText | Role::Text | Role::Terminal);
                 if !is_text {
-                    overlay.hide();
+                    overlay.hide_mic();
                     *focused.lock().unwrap_or_else(|e| e.into_inner()) = None;
                     continue;
                 }
@@ -58,8 +59,9 @@ pub async fn run_watcher(
                 };
                 let comp = match comp.path(obj.path.as_str()) { Ok(b) => b, Err(_) => continue };
                 let comp = match comp.cache_properties(atspi::zbus::proxy::CacheProperties::No).build().await { Ok(c) => c, Err(_) => continue };
-                if let Ok((x, y, w, _h)) = comp.get_extents(CoordType::Screen).await {
-                    overlay.show(x + w + 4, y);
+                if let Ok((x, y, w, h)) = comp.get_extents(CoordType::Screen).await {
+                    overlay.show_mic(x + w + 4, y, h as i16);
+                    log.info(format!("focused text field at ({x},{y}) size {w}x{h}"));
                     *focused.lock().unwrap_or_else(|e| e.into_inner()) = Some(obj);
                     if let Ok(out) = Command::new("xdotool").arg("getactivewindow").output() {
                         let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
