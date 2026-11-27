@@ -45,7 +45,7 @@ async fn main() {
         let mut key = String::new();
         match std::process::Command::new("zenity")
             .args(["--entry", "--title=VoiceType Setup",
-                   "--text=Paste your Google Cloud Speech-to-Text API key:",
+                   "--text=Paste your Google Gemini API key (aistudio.google.com/apikey):",
                    "--width=400"])
             .output()
         {
@@ -57,7 +57,7 @@ async fn main() {
                 // zenity not installed: ask on the terminal instead of dying silently.
                 tracing::warn!("zenity not available ({e}); falling back to terminal prompt");
                 use std::io::Write;
-                print!("Paste your Google Cloud Speech-to-Text API key: ");
+                print!("Paste your Google Gemini API key: ");
                 let _ = std::io::stdout().flush();
                 if std::io::stdin().read_line(&mut key).is_ok() {
                     key = key.trim().to_string();
@@ -69,6 +69,21 @@ async fn main() {
             let _ = config::save(&cfg);
         } else {
             tracing::warn!("No API key entered; transcription will fail");
+        }
+    }
+
+    // Validate the key up front so a bad/revoked key is visible immediately
+    // instead of failing silently on the first dictation.
+    if !cfg.google_api_key.is_empty() {
+        match stt::validate_key(&cfg.google_api_key).await {
+            Ok(()) => tracing::info!("Gemini API key validated"),
+            Err(e) => {
+                tracing::error!("API key validation failed: {e}");
+                notify_error(&format!(
+                    "Your Gemini API key was rejected:\n\n{e}\n\nEdit {} and set a valid key.",
+                    config::config_path().display()
+                ));
+            }
         }
     }
 
@@ -116,48 +131,17 @@ async fn main() {
     let is_recording = Arc::new(AtomicBool::new(false));
     let mut current_stop: Option<Arc<AtomicBool>> = None;
 
+    // Shared pipeline types so both triggers (auto + click) use one code path.
     loop {
         tokio::select! {
             Some(()) = auto_rx.recv() => {
                 // Drain queued auto-triggers to avoid spam recordings
                 while auto_rx.try_recv().is_ok() {}
                 if is_recording.load(Ordering::Relaxed) { /* ignore while recording */ } else {
-                    is_recording.store(true, Ordering::Relaxed);
-                    overlay.set_recording(true);
-                    let stop = Arc::new(AtomicBool::new(false));
-                    current_stop = Some(stop.clone());
-                    let cfg2 = cfg.clone();
-                    let overlay2 = overlay.clone();
-                    let focused2 = focused.clone();
-                    let window_id2 = window_id.clone();
-                    let stop2 = stop.clone();
-                    let is_rec2 = is_recording.clone();
-                    tokio::spawn(async move {
-                        let rec = audio::Recorder { stop: stop2.clone() };
-                        let path = tokio::task::spawn_blocking(move || {
-                            rec.record(cfg2.sample_rate, cfg2.silence_threshold, cfg2.max_record_seconds)
-                        }).await.unwrap_or(Err("join".into()));
-                        if let Ok(p) = path {
-                            match stt::transcribe(&cfg2.google_api_key, &p, &cfg2.language, &cfg2.alt_languages, &cfg2.model, cfg2.sample_rate).await {
-                                Ok(text) => {
-                                    if !text.is_empty() {
-                                        let target = focused2.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                                        if let Some(t) = target {
-                                            let wid = window_id2.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                                            match AccessibilityConnection::new().await {
-                                                Ok(conn) => { let _ = inject::inject_text(conn.connection(), &t, &text, wid.as_deref()).await; }
-                                                Err(e) => tracing::error!("atspi reconnect failed: {e}"),
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) => tracing::error!("stt: {e}"),
-                            }
-                            let _ = std::fs::remove_file(p);
-                        }
-                        is_rec2.store(false, Ordering::Relaxed);
-                        overlay2.set_recording(false);
-                    });
+                    start_pipeline(
+                        &cfg, &overlay, &focused, &window_id, &is_recording,
+                        &mut current_stop,
+                    ).await;
                 }
             }
             Some(()) = click_rx.recv() => {
@@ -165,42 +149,10 @@ async fn main() {
                     if let Some(s) = &current_stop { s.store(true, Ordering::Relaxed); }
                     is_recording.store(false, Ordering::Relaxed);
                 } else {
-                    is_recording.store(true, Ordering::Relaxed);
-                    overlay.set_recording(true);
-                    let stop = Arc::new(AtomicBool::new(false));
-                    current_stop = Some(stop.clone());
-                    let cfg2 = cfg.clone();
-                    let overlay2 = overlay.clone();
-                    let focused2 = focused.clone();
-                    let window_id2 = window_id.clone();
-                    let stop2 = stop.clone();
-                    let is_rec2 = is_recording.clone();
-                    tokio::spawn(async move {
-                        let rec = audio::Recorder { stop: stop2.clone() };
-                        let path = tokio::task::spawn_blocking(move || {
-                            rec.record(cfg2.sample_rate, cfg2.silence_threshold, cfg2.max_record_seconds)
-                        }).await.unwrap_or(Err("join".into()));
-                        if let Ok(p) = path {
-                            match stt::transcribe(&cfg2.google_api_key, &p, &cfg2.language, &cfg2.alt_languages, &cfg2.model, cfg2.sample_rate).await {
-                                Ok(text) => {
-                                    if !text.is_empty() {
-                                        let target = focused2.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                                        if let Some(t) = target {
-                                            let wid = window_id2.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                                            match AccessibilityConnection::new().await {
-                                                Ok(conn) => { let _ = inject::inject_text(conn.connection(), &t, &text, wid.as_deref()).await; }
-                                                Err(e) => tracing::error!("atspi reconnect failed: {e}"),
-                                            }
-                                        }
-                                    }
-                                }
-                                Err(e) => tracing::error!("stt: {e}"),
-                            }
-                            let _ = std::fs::remove_file(p);
-                        }
-                        is_rec2.store(false, Ordering::Relaxed);
-                        overlay2.set_recording(false);
-                    });
+                    start_pipeline(
+                        &cfg, &overlay, &focused, &window_id, &is_recording,
+                        &mut current_stop,
+                    ).await;
                 }
             }
             _ = tokio::signal::ctrl_c() => {
@@ -209,6 +161,92 @@ async fn main() {
         }
     }
 }
+
+/// Begin a recording, then transcribe + inject in the background.
+/// Handles the overlay state machine: Recording -> Processing -> Idle/Error.
+async fn start_pipeline(
+    cfg: &config::Config,
+    overlay: &overlay::Overlay,
+    focused: &Arc<Mutex<Option<ObjectRef>>>,
+    window_id: &Arc<Mutex<Option<String>>>,
+    is_recording: &Arc<AtomicBool>,
+    current_stop: &mut Option<Arc<AtomicBool>>,
+) {
+    is_recording.store(true, Ordering::Relaxed);
+    overlay.set_recording(true);
+
+    let stop = Arc::new(AtomicBool::new(false));
+    *current_stop = Some(stop.clone());
+
+    let cfg2 = cfg.clone();
+    let overlay2 = overlay.clone();
+    let focused2 = focused.clone();
+    let window_id2 = window_id.clone();
+    let stop2 = stop.clone();
+    let is_rec2 = is_recording.clone();
+
+    tokio::spawn(async move {
+        let rec = audio::Recorder { stop: stop2.clone() };
+        let path = tokio::task::spawn_blocking(move || {
+            rec.record(cfg2.sample_rate, cfg2.silence_threshold, cfg2.max_record_seconds)
+        }).await.unwrap_or_else(|_| Err("recording task join failed".into()));
+
+        // Always clear the recording flag promptly, regardless of outcome.
+        is_rec2.store(false, Ordering::Relaxed);
+
+        match path {
+            Err(e) => {
+                tracing::error!("record: {e}");
+                overlay2.set_state(overlay::OverlayState::Error);
+                notify_error(&format!("Recording failed: {e}"));
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                overlay2.set_state(overlay::OverlayState::Idle);
+            }
+            Ok(p) => {
+                overlay2.set_state(overlay::OverlayState::Processing);
+                let result = stt::transcribe(
+                    &cfg2.google_api_key, &p, &cfg2.language,
+                    &cfg2.alt_languages, &cfg2.model, cfg2.sample_rate,
+                ).await;
+                let _ = std::fs::remove_file(&p);
+
+                match result {
+                    Ok(text) if !text.is_empty() => {
+                        let target = focused2.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        if let Some(t) = target {
+                            let wid = window_id2.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                            match AccessibilityConnection::new().await {
+                                Ok(conn) => {
+                                    if let Err(e) = inject::inject_text(conn.connection(), &t, &text, wid.as_deref()).await {
+                                        tracing::error!("inject: {e}");
+                                        overlay2.set_state(overlay::OverlayState::Error);
+                                        notify_error(&format!("Could not insert text: {e}"));
+                                        std::thread::sleep(std::time::Duration::from_secs(2));
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!("atspi reconnect failed: {e}");
+                                    overlay2.set_state(overlay::OverlayState::Error);
+                                }
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        // No speech detected — not an error, just nothing to insert.
+                        tracing::info!("transcription was empty (no speech?)");
+                    }
+                    Err(e) => {
+                        tracing::error!("stt: {e}");
+                        overlay2.set_state(overlay::OverlayState::Error);
+                        notify_error(&format!("Transcription failed:\n\n{e}"));
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                    }
+                }
+                overlay2.set_state(overlay::OverlayState::Idle);
+            }
+        }
+    });
+}
 async fn run_checks() {
     use std::process::Command;
     println!("VoiceType diagnostics");
@@ -216,7 +254,17 @@ async fn run_checks() {
     let cfg = config::load();
     println!("Config: {}", config::config_path().display());
     println!("  API key set: {}", !cfg.google_api_key.is_empty());
+    println!("  Model: {}", cfg.model);
     println!("  Language: {} (alt: {:?})", cfg.language, cfg.alt_languages);
+    if !cfg.google_api_key.is_empty() {
+        print!("  Gemini key test: ... ");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        match stt::validate_key(&cfg.google_api_key).await {
+            Ok(()) => println!("OK"),
+            Err(e) => println!("FAILED ({e})"),
+        }
+    }
     println!("DISPLAY: {:?}", std::env::var("DISPLAY").ok());
     let xd = Command::new("which").arg("xdotool").output();
     println!("xdotool: {}", xd.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_else(|_| "MISSING".into()));

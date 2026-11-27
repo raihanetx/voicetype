@@ -3,13 +3,14 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     pub google_api_key: String,
     /// Primary language code, e.g. "en-US" or "bn-BD".
     pub language: String,
     /// Alternative language codes for code-switching.
     pub alt_languages: Vec<String>,
-    /// Google Speech model, e.g. "latest_long".
+    /// Gemini model name, e.g. "gemini-3.5-transcribe".
     pub model: String,
     /// Sample rate for recording.
     pub sample_rate: u32,
@@ -28,7 +29,7 @@ impl Default for Config {
             google_api_key: String::new(),
             language: "en-US".into(),
             alt_languages: vec!["bn-BD".into()],
-            model: "latest_long".into(),
+            model: "gemini-3.5-transcribe".into(),
             sample_rate: 16000,
             silence_threshold: 0.015,
             max_record_seconds: 60,
@@ -47,7 +48,13 @@ pub fn config_path() -> PathBuf {
 pub fn load() -> Config {
     let p = config_path();
     if let Ok(s) = fs::read_to_string(&p) {
-        toml::from_str(&s).unwrap_or_default()
+        match toml::from_str(&s) {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("config parse error in {}: {e}; using defaults", p.display());
+                Config::default()
+            }
+        }
     } else {
         let c = Config::default();
         let _ = save(&c);

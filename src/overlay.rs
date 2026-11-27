@@ -16,6 +16,27 @@ enum OverlayCmd {
     Show(i32, i32),
     Hide,
     SetColor(bool),
+    SetState(OverlayState),
+}
+
+/// Visual state of the floating dot.
+#[derive(Clone, Copy, PartialEq)]
+pub enum OverlayState {
+    Idle,       // blue: waiting for input
+    Recording,  // red: capturing audio
+    Processing, // yellow: transcribing
+    Error,      // orange/red ring: something failed
+}
+
+impl OverlayState {
+    fn color(self) -> u32 {
+        match self {
+            OverlayState::Idle => 0x3366FF,
+            OverlayState::Recording => 0xFF3333,
+            OverlayState::Processing => 0xFFCC00,
+            OverlayState::Error => 0xFF6600,
+        }
+    }
 }
 
 impl Overlay {
@@ -37,6 +58,10 @@ impl Overlay {
     }
     pub fn set_recording(&self, rec: bool) {
         let _ = self.cmd_tx.lock().unwrap_or_else(|e| e.into_inner()).send(OverlayCmd::SetColor(rec));
+    }
+    /// Set the dot to an explicit visual state (for the debug indicator).
+    pub fn set_state(&self, state: OverlayState) {
+        let _ = self.cmd_tx.lock().unwrap_or_else(|e| e.into_inner()).send(OverlayCmd::SetState(state));
     }
 }
 
@@ -78,6 +103,8 @@ fn run_x11(click_tx: Sender<()>, cmd_rx: Receiver<OverlayCmd>) {
 
     let mut visible = false;
     let mut recording = false;
+    let mut state = OverlayState::Idle;
+    let mut dirty = false;
 
     loop {
         while let Ok(cmd) = cmd_rx.try_recv() {
@@ -86,6 +113,8 @@ fn run_x11(click_tx: Sender<()>, cmd_rx: Receiver<OverlayCmd>) {
                     let _ = conn.configure_window(win, &ConfigureWindowAux::new().x(x).y(y));
                     let _ = conn.map_window(win);
                     visible = true;
+                    state = OverlayState::Idle;
+                    dirty = true;
                 }
                 OverlayCmd::Hide => {
                     let _ = conn.unmap_window(win);
@@ -93,6 +122,13 @@ fn run_x11(click_tx: Sender<()>, cmd_rx: Receiver<OverlayCmd>) {
                 }
                 OverlayCmd::SetColor(r) => {
                     recording = r;
+                    state = if r { OverlayState::Recording } else { OverlayState::Idle };
+                    dirty = true;
+                }
+                OverlayCmd::SetState(s) => {
+                    state = s;
+                    recording = s == OverlayState::Recording;
+                    dirty = true;
                 }
             }
             let _ = conn.flush();
@@ -104,15 +140,21 @@ fn run_x11(click_tx: Sender<()>, cmd_rx: Receiver<OverlayCmd>) {
                     let _ = click_tx.send(());
                 }
                 Event::Expose(_) => {
-                    let color = if recording { 0xFF3333u32 } else { 0x3366FFu32 };
-                    let _ = conn.change_gc(gc, &ChangeGCAux::new().foreground(color));
-                    let _ = conn.poly_fill_arc(win, gc, &[XArc { x: 2, y: 2, width: (width-4) as u16, height: (height-4) as u16, angle1: 0, angle2: 360*64 }]);
-                    let _ = conn.flush();
+                    dirty = true;
                 }
                 _ => {}
             }
         } else {
             std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+
+        if dirty && visible {
+            let color = state.color();
+            let _ = conn.change_gc(gc, &ChangeGCAux::new().foreground(color));
+            let _ = conn.poly_fill_arc(win, gc, &[XArc { x: 2, y: 2, width: (width-4) as u16, height: (height-4) as u16, angle1: 0, angle2: 360*64 }]);
+            let _ = conn.flush();
+            dirty = false;
+            let _ = recording;
         }
     }
 }

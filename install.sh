@@ -23,16 +23,19 @@ DATA_DIR="$HOME/.local/share/voicetype"
 mkdir -p "$CFG_DIR" "$DATA_DIR"
 
 if [ ! -f "$CFG_DIR/config.toml" ]; then
-  cat > "$CFG_DIR/config.toml" <<'TOML'
-google_api_key = "PASTE_YOUR_GOOGLE_CLOUD_API_KEY_HERE"
+  # Optional: pass the key non-interactively, e.g. GEMINI_API_KEY=... ./install.sh
+  KEYVAL="${GEMINI_API_KEY:-PASTE_YOUR_GOOGLE_CLOUD_API_KEY_HERE}"
+  cat > "$CFG_DIR/config.toml" <<TOML
+google_api_key = "$KEYVAL"
 language = "en-US"
 alt_languages = ["bn-BD"]
-model = "latest_long"
+model = "gemini-3.5-transcribe"
 sample_rate = 16000
 silence_threshold = 0.015
 max_record_seconds = 60
+auto_record_on_focus = false
 TOML
-  echo "!! Created $CFG_DIR/config.toml — edit it and paste your Google API key."
+  echo "!! Created $CFG_DIR/config.toml — set your Gemini API key there (or re-run with GEMINI_API_KEY=...)."
 fi
 
 echo "==> Creating launcher wrapper"
