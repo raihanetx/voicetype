@@ -49,7 +49,7 @@ pub fn load() -> Config {
     let p = config_path();
     if let Ok(s) = fs::read_to_string(&p) {
         match toml::from_str(&s) {
-            Ok(c) => c,
+            Ok(c) => migrate(c),
             Err(e) => {
                 tracing::error!("config parse error in {}: {e}; using defaults", p.display());
                 Config::default()
@@ -60,6 +60,21 @@ pub fn load() -> Config {
         let _ = save(&c);
         c
     }
+}
+
+/// Bring configs written by older versions up to date. The app now speaks
+/// only to Gemini; any legacy Speech-to-Text model name is replaced.
+fn migrate(mut c: Config) -> Config {
+    let legacy = [
+        "latest_long", "latest_short", "command_and_search", "phone_call",
+        "video", "default", "long", "short",
+    ];
+    if legacy.contains(&c.model.as_str()) || c.model.is_empty() {
+        tracing::info!("migrating legacy model '{}' to gemini-3.5-transcribe", c.model);
+        c.model = "gemini-3.5-transcribe".into();
+        let _ = save(&c);
+    }
+    c
 }
 
 pub fn save(c: &Config) -> std::io::Result<()> {
