@@ -10,3 +10,4 @@ name = "voicetype"
 path = "src/main.rs"
 
 [dependencies]
+ureq = "3.5.2"
