@@ -4,6 +4,7 @@ pub mod atspi;
 pub mod audio;
 pub mod focus;
 pub mod gemini_http;
+pub mod gemini_transcribe;
 pub mod indicator;
 pub mod insert;
 pub mod ipc;
