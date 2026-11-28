@@ -3,6 +3,7 @@
 pub mod atspi;
 pub mod audio;
 pub mod focus;
+pub mod insert;
 pub mod ipc;
 pub mod overlay;
 pub mod secrets;
