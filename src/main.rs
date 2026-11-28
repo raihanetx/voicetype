@@ -130,6 +130,21 @@ async fn main() {
         atspi_watch::run_watcher(watcher_conn, overlay_w, focused_w, window_id_w, auto_record, auto_tx_w, log_w).await;
     });
 
+    // Polling fallback uses its own connection so it runs independently of the
+    // event stream (handles apps that never emit focus events).
+    match AccessibilityConnection::new().await {
+        Ok(poll_conn) => {
+            let overlay_p = overlay.clone();
+            let focused_p = focused.clone();
+            let window_id_p = window_id.clone();
+            let log_p = log.clone();
+            tokio::spawn(async move {
+                atspi_watch::run_poller(poll_conn, overlay_p, focused_p, window_id_p, log_p).await;
+            });
+        }
+        Err(e) => log.warn(format!("polling fallback disabled: {e}")),
+    }
+
     let overlay_click = overlay.clone();
     std::thread::spawn(move || loop {
         let btn = {
@@ -334,6 +349,10 @@ async fn run_checks() {
     match host.default_input_device() {
         Some(d) => println!("Audio input: {}", d.name().unwrap_or_default()),
         None => println!("Audio input: NONE (no microphone)"),
+    }
+    match atspi::connection::read_session_accessibility().await {
+        Ok(v) => println!("AT-SPI bridge enabled: {v}"),
+        Err(e) => println!("AT-SPI bridge enabled: unknown ({e})"),
     }
     match atspi::connection::AccessibilityConnection::new().await {
         Ok(_) => println!("AT-SPI: OK"),
