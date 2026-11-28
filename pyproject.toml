@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voicetype"
+version = "0.0.1"
+description = "Voice-to-text for Linux Mint: speak into any text field, transcribed with Gemini."
+readme = "ARCHITECTURE.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+voicetype = "voicetype.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["voicetype*"]
