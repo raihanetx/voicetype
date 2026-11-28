@@ -1,0 +1,12 @@
+[package]
+name = "voicetype"
+version = "0.0.1"
+edition = "2021"
+description = "Voice-to-text for Linux Mint: speak into any text field, transcribed with Gemini."
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "voicetype"
+path = "src/main.rs"
+
+[dependencies]
