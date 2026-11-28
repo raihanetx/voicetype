@@ -18,3 +18,17 @@ jobs:
           name: voicetype-linux-x86_64
           path: target/release/voicetype
           if-no-files-found: error
+
+  deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --verbose
+      - run: cargo install cargo-deb --locked
+      - run: cargo deb --no-build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voicetype-deb
+          path: target/debian/*.deb
+          if-no-files-found: error
