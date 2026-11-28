@@ -1,5 +1,6 @@
 //! VoiceType — voice-to-text for Linux Mint (Rust skeleton).
 
+pub mod ipc;
 pub mod secrets;
 pub mod state;
 
