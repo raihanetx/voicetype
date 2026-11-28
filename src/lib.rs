@@ -3,6 +3,7 @@
 pub mod atspi;
 pub mod audio;
 pub mod focus;
+pub mod indicator;
 pub mod insert;
 pub mod ipc;
 pub mod overlay;
