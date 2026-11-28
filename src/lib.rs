@@ -3,6 +3,7 @@
 pub mod atspi;
 pub mod focus;
 pub mod ipc;
+pub mod overlay;
 pub mod secrets;
 pub mod state;
 
